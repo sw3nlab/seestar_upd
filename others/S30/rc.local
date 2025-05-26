@@ -1,0 +1,98 @@
+#!/bin/sh 
+#
+# rc.local
+#
+# This script is executed at the end of each multiuser runlevel.
+# Make sure that the script will "exit 0" on success or any other
+# value on error.
+#
+# In order to enable or disable this script just change the execution
+# bits.
+#
+# By default this script does nothing.
+
+# Print the IP address
+_IP=$(hostname -I) || true
+if [ "$_IP" ]; then
+    printf "My IP address is %s\n" "$_IP"
+fi
+
+insmod /lib/modules/`uname -r`/kernel/fs/exfat/exfat.ko
+
+zwo_drv_path=/lib/modules/`uname -r`/kernel/drivers
+
+insmod $zwo_drv_path/misc/pwm_gpio.ko
+insmod $zwo_drv_path/misc/eaf.ko
+insmod $zwo_drv_path/misc/pwrled_gpio.ko
+insmod $zwo_drv_path/misc/zwo-beeper.ko
+
+insmod $zwo_drv_path/media/platform/rockchip/isp/video_rkisp.ko
+insmod $zwo_drv_path/media/platform/rockchip/ispp/video_rkispp.ko
+insmod $zwo_drv_path/char/raw_image_cache.ko
+
+insmod $zwo_drv_path/media/i2c/gc2083.ko
+#insmod $zwo_drv_path/media/i2c/gc2053.ko
+
+sleep 3
+
+echo 1 > /sys/module/video_rkcif/parameters/clr_unready_dev
+echo 1 > /sys/module/video_rkisp/parameters/clr_unready_dev
+echo 1 1 1 0 > /sys/devices/platform/rkcif_mipi_lvds/compact_test
+
+
+iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -o wlan0 -j MASQUERADE
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# ASIAIR Partition
+mount | grep -w "/dev/mmcblk0p8" 1>/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    if [ "`ls -A /boot/Image`" != "" ]; then mount -o remount,rw /; rm -rf /boot/Image/* ; mount -o remount,ro /; sync; fi
+    blkid | grep -w "/dev/mmcblk0p8" | grep -w "TYPE=\"exfat\"" 1>/dev/null 2>&1
+    if [ $? -ne 0 ]; then
+	echo "Format Partition : mmcblk0p8"
+	mkfs.exfat -n Seestar /dev/mmcblk0p8 1>/dev/null 2>&1
+    fi
+
+    mount /dev/mmcblk0p8 /boot/Image -o nofail,uid=1000,gid=1000,iocharset=utf8,rw
+fi
+
+
+# Swap Partition
+blkid | grep -w "/dev/mmcblk0p7" | grep -w "TYPE=\"swap\"" 1>/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Format Partition : mmcblk0p7"
+    mkswap -L swap /dev/mmcblk0p7 1>/dev/null 2>&1
+fi
+
+swapon /dev/mmcblk0p7
+
+
+## Home Partition
+mount | grep -w "/dev/mmcblk0p5" 1>/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Format Partition : mmcblk0p5"
+    mkfs.ext4 -F -L pi /dev/mmcblk0p5 1>/dev/null 2>&1
+
+    mount /dev/mmcblk0p5 /home/pi -o nofail,noatime,rw
+    
+    echo "Restore Home Partition"
+    chown -R pi:pi /home/pi
+    tar zxf /etc/zwo/pi.tgz -C /home/pi 1>/dev/null 2>&1
+    chown -R pi:pi /home/pi
+fi
+
+
+/etc/init.d/dhcpcd restart &
+
+
+mkdir -p /tmp/zwo/log
+chmod -R 777 /tmp/zwo
+sudo -u pi /etc/zwo/test_asiair_file.sh > /tmp/zwo/log/test_asiair_file.txt 2>&1
+
+chmod +x /home/pi/ASIAIR/asiair.sh
+sudo -u pi /home/pi/ASIAIR/asiair.sh
+
+/etc/usb_gadgets.sh &
+
+exit 0
+
